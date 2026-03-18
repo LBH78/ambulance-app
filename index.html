@@ -1,16 +1,160 @@
+
 <!DOCTYPE html>
+
 <html lang="zh-TW">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#dc2626" />
-    <title>榮光救護車線上叫車</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet" />
-  </head>
-  <body style="margin:0;padding:0;">
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
-</html>
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta name="theme-color" content="#dc2626"/>
+<title>榮光救護車線上叫車</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Noto Sans TC','Microsoft JhengHei',sans-serif;background:#f8f8f8;-webkit-tap-highlight-color:transparent}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes ripple{0%{transform:scale(0.8);opacity:.5}100%{transform:scale(1.4);opacity:0}}
+@keyframes floatY{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:translateY(0)}}
+@keyframes popIn{0%{transform:scale(.5);opacity:0}70%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
+.spinner{width:18px;height:18px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;display:inline-block}
+input,select,button{font-family:inherit}
+button:active{opacity:.85}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const e = React.createElement;
+const { useState, useEffect, useRef } = React;
+
+// ── Config ─────────────────────────────────────────
+const GMAPS_KEY = “AIzaSyAs2R_0xGTLkFQrK-F5XV6PtohfhaPNZGk”;
+const RATES = {
+baseFare:600, baseKm:5, perKm:60,
+nurse:700, emt:500, monitor:600,
+o2south:500, o2central:1000, o2north:1500
+};
+
+let ORDERS = [];
+let counter = 1000;
+const genId = () => “RG” + (++counter);
+
+function calcFare(distKm, durMin, nurse, emt, monitor, oxygen, o2r) {
+const over = Math.max(0, distKm - RATES.baseFare / RATES.perKm - (RATES.baseKm - RATES.baseFare/RATES.perKm));
+const overKm = Math.max(0, distKm - RATES.baseKm);
+const car = RATES.baseFare + Math.ceil(overKm * RATES.perKm);
+const hrs = Math.ceil(durMin / 60);
+const nFee = nurse ? hrs * RATES.nurse : 0;
+const eFee = emt ? hrs * RATES.emt : 0;
+const mFee = monitor ? RATES.monitor : 0;
+const o2Fee = oxygen ? (o2r===“south”?RATES.o2south:o2r===“central”?RATES.o2central:RATES.o2north) : 0;
+const sub = car + nFee + eFee + mFee + o2Fee;
+const tax = Math.round(sub * .05);
+return { car, nFee, eFee, mFee, o2Fee, sub, tax, total: sub+tax, overKm: overKm.toFixed(1), hrs };
+}
+
+// ── Styles helpers ──────────────────────────────────
+const S = {
+header: { background:“linear-gradient(135deg,#dc2626,#991b1b)”, padding:“14px 18px”, display:“flex”, alignItems:“center”, gap:12 },
+card: { background:”#fff”, borderRadius:14, padding:20, marginBottom:14, boxShadow:“0 2px 12px rgba(0,0,0,.06)” },
+inp: { width:“100%”, padding:“11px 13px”, border:“2px solid #e5e7eb”, borderRadius:10, fontSize:15, outline:“none”, background:”#fafafa”, boxSizing:“border-box”, transition:“border-color .2s”, fontFamily:“inherit” },
+btn: (bg, shadow) => ({ width:“100%”, background:bg, color:”#fff”, border:“none”, borderRadius:12, padding:“15px”, fontSize:16, fontWeight:800, cursor:“pointer”, display:“flex”, alignItems:“center”, justifyContent:“center”, gap:10, boxShadow:shadow||“none” }),
+chip: (active, color) => ({ border:`2px solid ${active?color:"#e5e7eb"}`, background:active?color+“18”:”#fff”, borderRadius:10, padding:“11px 13px”, cursor:“pointer”, transition:“all .2s”, textAlign:“center” }),
+stepDot: (active, done) => ({ width:22, height:22, borderRadius:“50%”, background:active?”#dc2626”:done?”#dcfce7”:”#e5e7eb”, color:active?”#fff”:done?”#166534”:”#9ca3af”, display:“flex”, alignItems:“center”, justifyContent:“center”, fontWeight:700, fontSize:11 }),
+};
+
+function inp(val, set, placeholder, opts={}) {
+return e(“input”, { style:S.inp, placeholder, value:val, onChange:ev=>set(ev.target.value), onFocus:ev=>ev.target.style.borderColor=”#dc2626”, onBlur:ev=>ev.target.style.borderColor=”#e5e7eb”, …opts });
+}
+
+// ── QR Code pattern (decorative) ───────────────────
+function QRCode({ size=180 }) {
+const P=[[1,1,1,1,1,1,1,0,1,0,1,0,1,1,1,1,1,1,1],[1,0,0,0,0,0,1,0,0,1,0,1,1,0,0,0,0,0,1],[1,0,1,1,1,0,1,0,1,0,1,0,1,0,1,1,1,0,1],[1,0,1,1,1,0,1,0,0,0,0,0,1,0,1,1,1,0,1],[1,0,1,1,1,0,1,0,1,1,0,1,1,0,1,1,1,0,1],[1,0,0,0,0,0,1,0,0,1,1,0,1,0,0,0,0,0,1],[1,1,1,1,1,1,1,0,1,0,1,0,1,1,1,1,1,1,1],[0,0,0,0,0,0,0,0,1,1,0,1,0,0,0,0,0,0,0],[1,0,1,1,0,1,1,1,0,0,1,0,1,1,0,1,1,0,1],[0,1,0,0,1,0,0,1,1,0,0,1,0,0,1,1,0,1,0],[1,1,0,1,0,1,1,0,0,1,1,0,1,0,0,1,0,1,1],[0,0,0,0,0,0,0,0,1,0,1,1,0,1,1,0,1,0,0],[1,1,1,1,1,1,1,0,0,1,0,0,1,0,1,1,0,1,0],[1,0,0,0,0,0,1,0,1,0,1,0,0,1,0,0,1,0,1],[1,0,1,1,1,0,1,0,0,0,1,1,1,0,1,1,0,0,1],[1,0,1,1,1,0,1,0,1,1,0,0,0,1,0,1,1,1,0],[1,0,1,1,1,0,1,0,0,1,1,0,1,0,0,0,1,0,1],[1,0,0,0,0,0,1,0,1,0,0,1,0,1,1,0,0,1,0],[1,1,1,1,1,1,1,0,1,1,0,0,1,0,1,0,1,1,1]];
+const c = size/19;
+return e(“svg”, { width:size, height:size, viewBox:`0 0 ${size} ${size}`, style:{display:“block”} },
+e(“rect”, { width:size, height:size, fill:“white”, rx:10 }),
+…P.flatMap((row,r) => row.map((v,col) => v ? e(“rect”,{key:`${r}-${col}`,x:col*c+1,y:r*c+1,width:c-.5,height:c-.5,fill:”#1a1a2e”,rx:1}) : null).filter(Boolean))
+);
+}
+
+// ── Steps bar ───────────────────────────────────────
+function Steps({ current }) {
+const labels = [“填寫資料”,“確認付款”,“等待派車”];
+return e(“div”, { style:{ background:”#fff”, borderBottom:“1px solid #eee”, padding:“11px 18px”, display:“flex”, alignItems:“center”, gap:8, fontSize:12 } },
+…labels.map((s,i) => e(“div”, { key:s, style:{ display:“flex”, alignItems:“center”, gap:8 } },
+e(“div”, { style:S.stepDot(i===current, i<current) }, i<current?“✓”:i+1),
+e(“span”, { style:{ color:i===current?”#dc2626”:i<current?”#166534”:”#9ca3af”, fontWeight:i===current?700:400 } }, s),
+i<2 ? e(“span”, { style:{color:”#d1d5db”} }, “›”) : null
+))
+);
+}
+
+// ════════════════════════════════════════════════════
+// SCREEN 1 — QR Landing
+// ════════════════════════════════════════════════════
+function QRLanding({ onEnter }) {
+const [pulse, setPulse] = useState(false);
+useEffect(() => { const t = setInterval(() => setPulse(p=>!p), 1400); return ()=>clearInterval(t); }, []);
+const url = window.location.href.replace(//$/, “”);
+
+return e(“div”, { style:{ minHeight:“100vh”, background:“linear-gradient(135deg,#0f0c29,#302b63,#24243e)”, display:“flex”, flexDirection:“column”, alignItems:“center”, justifyContent:“center”, padding:24, position:“relative”, overflow:“hidden”, fontFamily:”‘Noto Sans TC’,sans-serif” } },
+// ripple rings
+…[0,1,2,3,4].map(i => e(“div”, { key:i, style:{ position:“absolute”, borderRadius:“50%”, border:“1px solid rgba(239,68,68,.15)”, width:(i+1)*180, height:(i+1)*180, animation:`ripple ${2+i*.5}s ease-out infinite`, animationDelay:`${i*.3}s`, opacity:.4 } })),
+
+```
+// ambulance icon
+e("div", { style:{ background:"rgba(239,68,68,.15)", border:"2px solid rgba(239,68,68,.5)", borderRadius:"50%", width:80, height:80, display:"flex", alignItems:"center", justifyContent:"center", marginBottom:24, animation:"floatY 3s ease-in-out infinite", boxShadow:"0 0 30px rgba(239,68,68,.3)", fontSize:38 } }, "🚑"),
+
+e("div", { style:{ textAlign:"center", marginBottom:28, animation:"fadeUp .8s ease both" } },
+  e("div", { style:{ color:"rgba(255,255,255,.45)", fontSize:12, letterSpacing:6, marginBottom:8 } }, "榮光救護車"),
+  e("h1", { style:{ color:"#fff", fontSize:28, fontWeight:900, margin:0, lineHeight:1.2 } }, "線上派車服務"),
+  e("div", { style:{ color:"rgba(239,68,68,.9)", fontSize:13, marginTop:8, letterSpacing:2 } }, "專業 · 迅速 · 安心"),
+),
+
+// QR box
+e("div", { style:{ background:"#fff", borderRadius:20, padding:18, boxShadow:`0 0 ${pulse?44:18}px rgba(239,68,68,${pulse?.5:.18})`, transition:"box-shadow .7s ease", marginBottom:22, animation:"fadeUp 1s ease .15s both" } },
+  e(QRCode, { size:180 }),
+  e("div", { style:{ textAlign:"center", marginTop:10, color:"#374151", fontSize:12, fontWeight:700, letterSpacing:2 } }, "掃描 QR Code 叫車"),
+  e("div", { style:{ textAlign:"center", marginTop:3, color:"#9ca3af", fontSize:10, wordBreak:"break-all", maxWidth:180 } }, url),
+),
+
+e("div", { style:{ color:"rgba(255,255,255,.35)", fontSize:13, marginBottom:18 } }, "或點擊下方按鈕直接進入"),
+
+e("button", { onClick:onEnter, style:{ background:"linear-gradient(135deg,#ef4444,#dc2626)", color:"#fff", border:"none", borderRadius:50, padding:"15px 48px", fontSize:17, fontWeight:800, cursor:"pointer", letterSpacing:2, boxShadow:"0 8px 32px rgba(239,68,68,.4)", animation:"fadeUp 1s ease .4s both" } }, "立即叫車 →"),
+
+e("div", { style:{ position:"absolute", bottom:18, color:"rgba(255,255,255,.18)", fontSize:11 } }, "© 2025 榮光救護車有限公司"),
+```
+
+);
+}
+
+// ════════════════════════════════════════════════════
+// SCREEN 2 — Booking
+// ════════════════════════════════════════════════════
+function Booking({ onNext }) {
+const [origin, setOrigin] = useState(””);
+const [dest, setDest] = useState(””);
+const [name, setName] = useState(””);
+const [phone, setPhone] = useState(””);
+const [nurse, setNurse] = useState(false);
+const [emt, setEmt] = useState(false);
+const [monitor, setMonitor] = useState(false);
+const [oxygen, setOxygen] = useState(false);
+const [o2r, setO2r] = useState(“south”);
+const [loading, setLoading] = useState(false);
+const [route, setRoute] = useState(null);
+const [err, setErr] = useState(””);
+
+const fare = route ? calcFare(route.distKm, route.durMin, nurse, emt, monitor, oxygen, o2r) : null;
+
+const fetchRoute = async () => {
+if (!origin||!dest) { setErr(“請填寫出發地與目的地”); return; }
+if (!name||!phone) { setErr(“請填寫病患姓名與聯絡電話”); return; }
+setErr(””); setLoading(true); setRoute(null);
+try {
+const enc = encodeURIComponent;
+const api = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${enc(origin)}&destinations=${enc(dest)}&mode=driving&language=zh-TW&key=${GMAPS_KEY}`;
+const res = await fetch(`https://corsproxy.io/?${enc(api)}`);
+con
